@@ -1,0 +1,10 @@
+# HardScope runtime dependencies.
+#
+# System packages (install via dnf, NOT pip — these are the GTK bindings):
+#   sudo dnf install python3-gobject gtk4 libadwaita
+#
+# Python package:
+psutil>=5.9
+
+# Optional CLI tools used for richer data (already on most Fedora systems):
+#   util-linux (lsblk), pciutils (lspci), dmidecode, smartmontools (smartctl)

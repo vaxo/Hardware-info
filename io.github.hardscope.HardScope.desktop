@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=HardScope
+Comment=Hardware monitor with temperatures, like Speccy
+Exec=python3 -m hardscope
+Icon=computer
+Terminal=false
+Categories=System;Monitor;Utility;
+Keywords=hardware;monitor;temperature;sensors;cpu;gpu;system;info;

@@ -1,0 +1,12 @@
+┌─ HardScope ──────────────────────────────────────────────┐
+│ ┌──────────┐  Processor                                   │
+│ │ Summary  │   Model            Intel Core i7-6820HQ      │
+│ │ CPU    ◀ │   Cores / Threads  4 / 8                     │
+│ │ Memory   │   Current Freq     2.82 GHz                  │
+│ │ Graphics │   Package Temp     50 °C                     │
+│ │ Storage  │                                              │
+│ │ Sensors  │  Per-Core Usage                              │
+│ │ Network  │   Core 0  ███████░░░░░  33%  2.8GHz          │
+│ │ System   │   Core 1  ████░░░░░░░░  16%  2.8GHz          │
+│ └──────────┘   ...                                        │
+└────────────────────────────  CPU 50 °C · 27 % | live ─────┘
