@@ -8,12 +8,14 @@ startup; live values (temps, usage, fans, clocks) refresh on a timer.
 from __future__ import annotations
 
 import gi
+import math
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+from . import fancontrol  # noqa: E402
 from . import hardware as hw  # noqa: E402
 
 REFRESH_MS = 1500
@@ -82,6 +84,26 @@ class StatGroup(Gtk.Box):
             lbl.set_label(text if text is not None else _pct(percent))
 
 
+_HEALTH_COLORS = {
+    "OK": "#57e389",
+    "PASSED": "#57e389",
+    "FAILED": "#e01b24",
+    "NEEDS ROOT": "#e5a50a",
+}
+
+
+def _health_label(health):
+    """Label with a coloured dot (green/red/amber/grey) matching the SMART status."""
+    color = _HEALTH_COLORS.get((health or "").strip().upper(), "#c0bfbc")
+    lbl = Gtk.Label()
+    lbl.set_markup(
+        f'<span foreground="{color}" font_weight="bold">●</span>'
+        f'  {GLib.markup_escape_text(health or "—")}'
+    )
+    lbl.set_xalign(1.0)
+    return lbl
+
+
 def _page(*groups):
     """Wrap stat groups in a scrollable, clamped column."""
     col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
@@ -97,6 +119,104 @@ def _page(*groups):
     return scroller
 
 
+class TurbineWidget(Gtk.DrawingArea):
+    """Animated jet-turbine fan disk; spin speed is proportional to RPM."""
+
+    N_BLADES = 8
+    MAX_ANG_VEL = 10.0 * math.pi  # rad/s at 100 % RPM (~5 rev/s)
+    FRAME_MS = 16                  # ~60 fps
+
+    def __init__(self, size=130):
+        super().__init__()
+        self.set_size_request(size, size)
+        self._angle = 0.0
+        self._rpm = 0
+        self._max_rpm = 5000
+        self.set_draw_func(self._on_draw)
+        GLib.timeout_add(self.FRAME_MS, self._frame)
+
+    def set_rpm(self, rpm, max_rpm=None):
+        self._rpm = max(0, rpm or 0)
+        if max_rpm is not None:
+            self._max_rpm = max(1, max_rpm)
+
+    def _frame(self):
+        frac = min(1.0, self._rpm / max(1, self._max_rpm))
+        self._angle = (
+            self._angle + frac * self.MAX_ANG_VEL * self.FRAME_MS / 1000.0
+        ) % (2 * math.pi)
+        self.queue_draw()
+        return True
+
+    def _on_draw(self, _area, cr, w, h):
+        r = min(w, h) / 2.0 - 2.0
+        cx, cy = w / 2.0, h / 2.0
+        hub = r * 0.16
+        tip = r * 0.90
+
+        # Dark background disk
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.set_source_rgb(0.10, 0.10, 0.13)
+        cr.fill()
+
+        # Outer casing ring
+        cr.arc(cx, cy, r - 1.0, 0, 2 * math.pi)
+        cr.set_source_rgb(0.30, 0.32, 0.38)
+        cr.set_line_width(2.5)
+        cr.stroke()
+
+        # Inner guide ring
+        cr.arc(cx, cy, hub * 2.8, 0, 2 * math.pi)
+        cr.set_source_rgb(0.22, 0.23, 0.28)
+        cr.set_line_width(1.5)
+        cr.stroke()
+
+        # Rotor blades
+        cr.save()
+        cr.translate(cx, cy)
+        cr.rotate(self._angle)
+
+        bw_hub = hub * 0.9
+        bw_tip = tip * 0.22
+        sweep = r * 0.14
+
+        for i in range(self.N_BLADES):
+            cr.save()
+            cr.rotate(2 * math.pi * i / self.N_BLADES)
+            # Swept-back airfoil blade (leading edge curves forward at hub,
+            # trails back toward tip — the classic turbine-blade silhouette).
+            cr.move_to(hub, -bw_hub / 2)
+            cr.curve_to(
+                hub + (tip - hub) * 0.35, -bw_hub / 2 - sweep * 0.5,
+                tip - bw_tip,              -bw_tip / 2 - sweep,
+                tip,                       -bw_tip / 2,
+            )
+            cr.line_to(tip, bw_tip / 2)
+            cr.curve_to(
+                tip - bw_tip,              bw_tip / 2 - sweep * 0.3,
+                hub + (tip - hub) * 0.35,  bw_hub / 2 - sweep * 0.2,
+                hub,                       bw_hub / 2,
+            )
+            cr.close_path()
+            cr.set_source_rgb(0.50, 0.53, 0.60)
+            cr.fill_preserve()
+            cr.set_source_rgb(0.25, 0.27, 0.33)
+            cr.set_line_width(0.8)
+            cr.stroke()
+            cr.restore()
+
+        cr.restore()
+
+        # Hub dome
+        cr.arc(cx, cy, hub, 0, 2 * math.pi)
+        cr.set_source_rgb(0.65, 0.67, 0.73)
+        cr.fill()
+        # Specular highlight on hub
+        cr.arc(cx - hub * 0.25, cy - hub * 0.25, hub * 0.40, 0, 2 * math.pi)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.55)
+        cr.fill()
+
+
 class HardScopeWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="HardScope")
@@ -108,6 +228,8 @@ class HardScopeWindow(Adw.ApplicationWindow):
         self._core_bars = []
         self._sensor_labels = {}  # (chip, kind, label) -> Gtk.Label
         self._updaters = []  # list of fn(dyn)
+        self._fan = fancontrol.FanController()
+        self.connect("close-request", self._on_close)
 
         stack = Gtk.Stack()
         stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
@@ -121,6 +243,7 @@ class HardScopeWindow(Adw.ApplicationWindow):
         stack.add_titled(self._build_graphics(), "graphics", "Graphics")
         stack.add_titled(self._build_storage(), "storage", "Storage")
         stack.add_titled(self._build_sensors(), "sensors", "Sensors")
+        stack.add_titled(self._build_fans(), "fans", "Fan Control")
         stack.add_titled(self._build_network(), "network", "Network")
         stack.add_titled(self._build_system(), "system", "System")
 
@@ -326,9 +449,16 @@ class HardScopeWindow(Adw.ApplicationWindow):
         disks = StatGroup("Drives")
         for d in self.static["storage"]["disks"]:
             disks.add(
-                d["name"],
+                f"info_{d['name']}",
                 f"{d['model']} ({d['name']})",
-                f"{hw.fmt_bytes(d['size'])} · {d['type']} · {d['bus']} · health {d['health']}",
+                f"{hw.fmt_bytes(d['size'])} · {d['type']} · {d['bus']}",
+            )
+            disks.add(f"health_{d['name']}", "SMART Health", d["health"] or "—")
+            lbl = disks._labels[f"health_{d['name']}"]
+            color = _HEALTH_COLORS.get((d["health"] or "").strip().upper(), "#c0bfbc")
+            lbl.set_markup(
+                f'<span foreground="{color}" font_weight="bold" size="large">●</span>'
+                f'  {GLib.markup_escape_text(d["health"] or "—")}'
             )
         # live temp row for the NVMe drive
         disks.add("nvmetemp", "NVMe Temperature")
@@ -391,6 +521,144 @@ class HardScopeWindow(Adw.ApplicationWindow):
 
         self._updaters.append(update)
         return scroller
+
+    # ---- fan control ----------------------------------------------------
+    def _build_fans(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        box.set_margin_top(18)
+        box.set_margin_bottom(18)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        self._fan_widgets = {}  # idx -> {bar, rpm, max}
+        self._profile_buttons = {}  # name -> Gtk.ToggleButton
+        self._fan_setting = False  # guards programmatic widget changes
+
+        if not fancontrol.available():
+            page = Adw.StatusPage(
+                icon_name="dialog-information-symbolic",
+                title="Fan control unavailable",
+                description="This machine exposes no ACPI platform profile, and "
+                "its firmware does not allow direct fan control from Linux.",
+            )
+            page.set_vexpand(True)
+            box.append(page)
+            return self._wrap(box)
+
+        prof = fancontrol.read_profile()
+
+        # Thermal profile selector — the firmware lever that actually moves the
+        # fans on this hardware. Exact RPM/percent cannot be set: the BIOS owns
+        # the fan curve and only honours these named profiles.
+        pgroup = Adw.PreferencesGroup(
+            title="Thermal Profile",
+            description="The BIOS controls exact fan speed; these profiles tell "
+            "it how aggressively to cool. Direct RPM/percent is not settable on "
+            "this laptop.",
+        )
+        prow = Adw.ActionRow(title="Profile")
+        linked = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        linked.add_css_class("linked")
+        linked.set_valign(Gtk.Align.CENTER)
+        for name in prof["choices"]:
+            btn = Gtk.ToggleButton(label=name.capitalize())
+            hint = fancontrol.PROFILE_HINTS.get(name)
+            if hint:
+                btn.set_tooltip_text(hint)
+            btn.connect("toggled", self._on_profile, name)
+            self._profile_buttons[name] = btn
+            linked.append(btn)
+        prow.add_suffix(linked)
+        pgroup.add(prow)
+        box.append(pgroup)
+
+        self._fan_status = Gtk.Label(label="", xalign=0)
+        self._fan_status.add_css_class("dim-label")
+        self._fan_status.set_wrap(True)
+        box.append(self._fan_status)
+
+        for fan in fancontrol.read_fans():
+            idx = fan["idx"]
+            fmax = max(fan["max"], 1)
+            g = StatGroup(fan["label"] or f"Fan {idx}")
+            g.set_hexpand(True)
+            rpm_row = Adw.ActionRow(title="Current Speed")
+            rbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            bar = Gtk.LevelBar(min_value=0, max_value=fmax)
+            bar.set_size_request(160, -1)
+            bar.set_valign(Gtk.Align.CENTER)
+            rpm_lbl = Gtk.Label(label="—")
+            rpm_lbl.add_css_class("dim-label")
+            rpm_lbl.set_width_chars(12)
+            rpm_lbl.set_xalign(1.0)
+            rbox.append(bar)
+            rbox.append(rpm_lbl)
+            rpm_row.add_suffix(rbox)
+            g._group.add(rpm_row)
+
+            turbine = TurbineWidget(size=130)
+            turbine.set_rpm(fan["rpm"] or 0, fmax)
+            turbine.set_margin_top(6)
+            turbine.set_margin_bottom(6)
+            turbine.set_margin_start(4)
+            turbine.set_valign(Gtk.Align.CENTER)
+
+            fan_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+            fan_row.set_valign(Gtk.Align.CENTER)
+            fan_row.append(turbine)
+            fan_row.append(g)
+            box.append(fan_row)
+            self._fan_widgets[idx] = {"bar": bar, "rpm": rpm_lbl, "max": fmax, "turbine": turbine}
+
+        def update(dyn):
+            for fan in fancontrol.read_fans():
+                w = self._fan_widgets.get(fan["idx"])
+                if not w:
+                    continue
+                rpm = fan["rpm"] or 0
+                w["bar"].set_value(min(rpm, w["max"]))
+                w["rpm"].set_label(f"{rpm} RPM")
+                w["turbine"].set_rpm(rpm, w["max"])
+            self._sync_profile_from_hw()  # reflect external profile changes
+            if not self._fan_status.get_label():
+                self._fan_status.set_label(
+                    "Changing the profile asks for your password once per session."
+                )
+
+        self._updaters.append(update)
+        self._sync_profile_from_hw()
+        return self._wrap(box)
+
+    def _wrap(self, box):
+        clamp = Adw.Clamp(maximum_size=820, child=box)
+        scroller = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        scroller.set_child(clamp)
+        return scroller
+
+    def _set_profile_buttons(self, name):
+        self._fan_setting = True
+        for n, btn in self._profile_buttons.items():
+            btn.set_active(n == name)
+        self._fan_setting = False
+
+    def _sync_profile_from_hw(self):
+        current = fancontrol.read_profile()["current"]
+        if current in self._profile_buttons:
+            self._set_profile_buttons(current)
+
+    def _on_profile(self, btn, name):
+        if self._fan_setting or not btn.get_active():
+            return
+        self._set_profile_buttons(name)
+        if self._fan.set_profile(name):
+            self._fan_status.set_label(f"Thermal profile set to {name.capitalize()}.")
+        else:
+            self._fan_status.set_label("Could not change profile (authorization failed).")
+            self._sync_profile_from_hw()
+
+    def _on_close(self, *_args):
+        self._fan.shutdown()
+        return False
 
     def _build_network(self):
         self._net_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)

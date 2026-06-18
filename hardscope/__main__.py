@@ -15,6 +15,7 @@ class HardScopeApp(Adw.Application):
         super().__init__(application_id="io.github.hardscope.HardScope")
 
     def do_activate(self):
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         win = self.props.active_window or HardScopeWindow(self)
         win.present()
 

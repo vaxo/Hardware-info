@@ -15,6 +15,12 @@ fan speeds, voltages) in a clean sidebar layout.
 - **Graphics** — each GPU's model, temperature, utilisation, VRAM
 - **Storage** — drives (model/size/bus/SMART health), NVMe temp, filesystem usage
 - **Sensors** — every `hwmon` chip: temperatures, fans (RPM), voltages — live
+- **Fan Control** — switch the firmware thermal profile (`cool` / `quiet` /
+  `balanced` / `performance` via ACPI `platform_profile`) and watch live RPM per
+  fan. Changing the profile needs root, so the app asks for your password once
+  per session (via `pkexec`). Note: most laptops (incl. Dell `dell_smm` models)
+  let the BIOS own the fan curve, so exact RPM/percent cannot be set from Linux —
+  the profile is the real lever.
 - **Network** — interfaces, IP/MAC, link speed, traffic counters
 - **System** — OS, kernel, motherboard, BIOS, uptime
 

@@ -2,7 +2,7 @@
 Type=Application
 Name=HardScope
 Comment=Hardware monitor with temperatures, like Speccy
-Exec=python3 -m hardscope
+Exec=/home/edge/hardscope/hardscope-root.sh
 Icon=computer
 Terminal=false
 Categories=System;Monitor;Utility;

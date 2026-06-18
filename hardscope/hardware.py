@@ -491,7 +491,7 @@ def read_storage(chips=None, include_disks=True):
         health = "—"
         if shutil.which("smartctl"):
             sout = _run(["smartctl", "-H", dev_path], timeout=6)
-            m = re.search(r"(?:overall-health.*?|SMART Health Status:)\s*([A-Za-z]+)", sout)
+            m = re.search(r"(?:overall-health self-assessment test result:|SMART Health Status:)\s*([A-Za-z]+)", sout)
             if m:
                 health = m.group(1).upper()
             elif "Permission denied" in sout or "requires root" in sout.lower():
